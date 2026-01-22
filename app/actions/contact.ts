@@ -1,7 +1,6 @@
 "use server"
 
 const HUBSPOT_ACCESS_TOKEN = process.env.HUBSPOT_ACCESS_TOKEN
-const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID
 
 export async function submitContactForm(formData: FormData) {
   const firstName = formData.get("firstName") as string
@@ -11,7 +10,6 @@ export async function submitContactForm(formData: FormData) {
   const propertyAddress = formData.get("propertyAddress") as string
   const situation = formData.get("situation") as string
 
-  // Validate required fields
   if (!firstName || !lastName || !phone || !email || !propertyAddress) {
     return {
       success: false,
@@ -19,7 +17,6 @@ export async function submitContactForm(formData: FormData) {
     }
   }
 
-  // Email validation
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
   if (!emailRegex.test(email)) {
     return {
@@ -28,8 +25,7 @@ export async function submitContactForm(formData: FormData) {
     }
   }
 
-  // Phone validation (basic)
-  const phoneRegex = /^[\d\s\-()$$$$+.]{10,}$/
+  const phoneRegex = /^[\d\s\-()+.]{10,}$/
   if (!phoneRegex.test(phone.replace(/\s/g, ""))) {
     return {
       success: false,
@@ -37,8 +33,29 @@ export async function submitContactForm(formData: FormData) {
     }
   }
 
+  if (!HUBSPOT_ACCESS_TOKEN) {
+    console.error("HUBSPOT_ACCESS_TOKEN is not configured")
+    return {
+      success: false,
+      message: "Sorry, there was a configuration error. Please call us directly at (786) 741-7160.",
+    }
+  }
+
   try {
-    // Create contact in HubSpot
+    const contactProperties: Record<string, string> = {
+      firstname: firstName,
+      lastname: lastName,
+      email: email,
+      phone: phone,
+      address: propertyAddress,
+      hs_lead_status: "NEW",
+      lifecyclestage: "lead",
+    }
+
+    if (situation) {
+      contactProperties.notes = `Property: ${propertyAddress}\n\nSituation: ${situation}`
+    }
+
     const hubspotResponse = await fetch(
       "https://api.hubapi.com/crm/v3/objects/contacts",
       {
@@ -48,24 +65,15 @@ export async function submitContactForm(formData: FormData) {
           Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
         },
         body: JSON.stringify({
-          properties: {
-            firstname: firstName,
-            lastname: lastName,
-            email: email,
-            phone: phone,
-            address: propertyAddress,
-            message: situation || "",
-            hs_lead_status: "NEW",
-            lifecyclestage: "lead",
-          },
+          properties: contactProperties,
         }),
       }
     )
 
-    // Handle duplicate contact (already exists in HubSpot)
+    const responseData = await hubspotResponse.json()
+
     if (hubspotResponse.status === 409) {
-      // Contact exists, try to update instead
-      const existingContactResponse = await fetch(
+      await fetch(
         `https://api.hubapi.com/crm/v3/objects/contacts/${encodeURIComponent(email)}?idProperty=email`,
         {
           method: "PATCH",
@@ -79,19 +87,23 @@ export async function submitContactForm(formData: FormData) {
               lastname: lastName,
               phone: phone,
               address: propertyAddress,
-              message: situation || "",
             },
           }),
         }
       )
-
-      if (!existingContactResponse.ok) {
-        console.error("HubSpot update error:", await existingContactResponse.text())
+      
+      return {
+        success: true,
+        message: "Thank you! We've received your information and will contact you within 24 hours with a cash offer.",
       }
-    } else if (!hubspotResponse.ok) {
-      const errorData = await hubspotResponse.text()
-      console.error("HubSpot API error:", errorData)
-      throw new Error(`HubSpot API error: ${hubspotResponse.status}`)
+    } 
+    
+    if (!hubspotResponse.ok) {
+      console.error("HubSpot API error:", JSON.stringify(responseData))
+      return {
+        success: false,
+        message: "Sorry, there was an error submitting your request. Please try again or call us directly at (786) 741-7160.",
+      }
     }
 
     return {
@@ -102,8 +114,7 @@ export async function submitContactForm(formData: FormData) {
     console.error("Error submitting form:", error)
     return {
       success: false,
-      message:
-        "Sorry, there was an error submitting your request. Please try again or call us directly at (786) 741-7160.",
+      message: "Sorry, there was an error submitting your request. Please try again or call us directly at (786) 741-7160.",
     }
   }
 }
