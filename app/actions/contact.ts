@@ -1,5 +1,8 @@
 "use server"
 
+const HUBSPOT_ACCESS_TOKEN = process.env.HUBSPOT_ACCESS_TOKEN
+const HUBSPOT_PORTAL_ID = process.env.HUBSPOT_PORTAL_ID
+
 export async function submitContactForm(formData: FormData) {
   const firstName = formData.get("firstName") as string
   const lastName = formData.get("lastName") as string
@@ -26,7 +29,7 @@ export async function submitContactForm(formData: FormData) {
   }
 
   // Phone validation (basic)
-  const phoneRegex = /^[\d\s\-$$$$+.]{10,}$/
+  const phoneRegex = /^[\d\s\-()$$$$+.]{10,}$/
   if (!phoneRegex.test(phone.replace(/\s/g, ""))) {
     return {
       success: false,
@@ -35,42 +38,61 @@ export async function submitContactForm(formData: FormData) {
   }
 
   try {
-    // In a real implementation, you would use a service like:
-    // - Resend (resend.com)
-    // - SendGrid
-    // - Nodemailer with SMTP
-    // - AWS SES
+    // Create contact in HubSpot
+    const hubspotResponse = await fetch(
+      "https://api.hubapi.com/crm/v3/objects/contacts",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+        },
+        body: JSON.stringify({
+          properties: {
+            firstname: firstName,
+            lastname: lastName,
+            email: email,
+            phone: phone,
+            address: propertyAddress,
+            message: situation || "",
+            hs_lead_status: "NEW",
+            lifecyclestage: "lead",
+          },
+        }),
+      }
+    )
 
-    // For now, we'll simulate the email sending
-    console.log("New lead submission:", {
-      firstName,
-      lastName,
-      phone,
-      email,
-      propertyAddress,
-      situation,
-      submittedAt: new Date().toISOString(),
-    })
+    // Handle duplicate contact (already exists in HubSpot)
+    if (hubspotResponse.status === 409) {
+      // Contact exists, try to update instead
+      const existingContactResponse = await fetch(
+        `https://api.hubapi.com/crm/v3/objects/contacts/${encodeURIComponent(email)}?idProperty=email`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${HUBSPOT_ACCESS_TOKEN}`,
+          },
+          body: JSON.stringify({
+            properties: {
+              firstname: firstName,
+              lastname: lastName,
+              phone: phone,
+              address: propertyAddress,
+              message: situation || "",
+            },
+          }),
+        }
+      )
 
-    // Simulate email sending delay
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-
-    // In production, you would send an actual email here:
-    /*
-    await sendEmail({
-      to: 'omar@missionvalleyhomebuyers.com',
-      subject: `New Cash Offer Request from ${firstName} ${lastName}`,
-      html: `
-        <h2>New Cash Offer Request</h2>
-        <p><strong>Name:</strong> ${firstName} ${lastName}</p>
-        <p><strong>Phone:</strong> ${phone}</p>
-        <p><strong>Email:</strong> ${email}</p>
-        <p><strong>Property Address:</strong> ${propertyAddress}</p>
-        <p><strong>Situation:</strong> ${situation || 'Not provided'}</p>
-        <p><strong>Submitted:</strong> ${new Date().toLocaleString()}</p>
-      `
-    })
-    */
+      if (!existingContactResponse.ok) {
+        console.error("HubSpot update error:", await existingContactResponse.text())
+      }
+    } else if (!hubspotResponse.ok) {
+      const errorData = await hubspotResponse.text()
+      console.error("HubSpot API error:", errorData)
+      throw new Error(`HubSpot API error: ${hubspotResponse.status}`)
+    }
 
     return {
       success: true,
